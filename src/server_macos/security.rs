@@ -483,15 +483,32 @@ pub fn local_authentication(reason: &str) -> bool {
     authenticate(reason).is_success()
 }
 
+/// Parse a base64url-no-pad VT_AUTH token; must decode to exactly 32 bytes.
+pub fn parse_auth_token_b64(s: &str) -> Result<[u8; 32]> {
+    let bytes = BASE64_URL_SAFE_NO_PAD.decode(s.trim())?;
+    bytes
+        .try_into()
+        .map_err(|v: Vec<u8>| anyhow::anyhow!("auth token must decode to 32 bytes, got {}", v.len()))
+}
+
 /// Build the initial KeychainStore (passcode + auth_token + encrypted
 /// passphrase) and write it as a single keychain item. Used by `vt init`,
 /// `vt secret import`, and `vt secret rotate-passcode` — all three either
 /// create the store fresh (init/import) or replace it wholesale (rotate),
 /// so this single call is the only write.
-pub fn create_and_save_passcode_passphrase(real_passphrase: &[u8; 32]) -> Result<()> {
+///
+/// `auth_token_b64` reuses an existing VT_AUTH token (import onto a second
+/// machine keeps clients working); `None` generates a fresh one.
+pub fn create_and_save_passcode_passphrase(
+    real_passphrase: &[u8; 32],
+    auth_token_b64: Option<String>,
+) -> Result<()> {
     use super::store::KeychainStore;
 
-    let origin_auth_token = AesGcmCrypto::generate_key();
+    let origin_auth_token = match auth_token_b64 {
+        Some(s) => parse_auth_token_b64(&s)?,
+        None => AesGcmCrypto::generate_key(),
+    };
     let hash = Sha256::digest(&Sha256::digest(origin_auth_token));
     let mut auth_token = [0u8; 32];
     auth_token.copy_from_slice(&hash[..32]);
@@ -683,8 +700,30 @@ mod tests {
     #[ignore]
     fn test_create_and_save_passcode_passphrase() {
         let real_passphrase = AesGcmCrypto::generate_key();
-        let result = create_and_save_passcode_passphrase(&real_passphrase);
+        let result = create_and_save_passcode_passphrase(&real_passphrase, None);
         assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_parse_auth_token_b64_round_trip() {
+        let token = AesGcmCrypto::generate_key();
+        let encoded = BASE64_URL_SAFE_NO_PAD.encode(token);
+        assert_eq!(parse_auth_token_b64(&encoded).unwrap(), token);
+        // Surrounding whitespace (e.g. a pasted trailing newline) is tolerated.
+        assert_eq!(parse_auth_token_b64(&format!(" {}\n", encoded)).unwrap(), token);
+    }
+
+    #[test]
+    fn test_parse_auth_token_b64_rejects_bad_input() {
+        // Wrong decoded length (16 bytes).
+        let short = BASE64_URL_SAFE_NO_PAD.encode([0u8; 16]);
+        assert!(parse_auth_token_b64(&short).is_err());
+        // Longer than 32 bytes must be rejected, not truncated.
+        let long = BASE64_URL_SAFE_NO_PAD.encode([0u8; 48]);
+        assert!(parse_auth_token_b64(&long).is_err());
+        // Not base64url.
+        assert!(parse_auth_token_b64("not/valid+base64=").is_err());
+        assert!(parse_auth_token_b64("").is_err());
     }
 
     /// Pure rewrap round-trip over an in-memory store: v1 (explicit old

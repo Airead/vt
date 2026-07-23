@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
 use sha2::{Digest, Sha256};
+use std::io::{self, Write};
 
 pub fn init() -> Result<()> {
     if KeychainStore::load().is_ok() {
@@ -19,7 +20,7 @@ pub fn init() -> Result<()> {
         ))?;
         std::process::exit(1);
     }
-    create_and_save_passcode_passphrase(&AesGcmCrypto::generate_key())?;
+    create_and_save_passcode_passphrase(&AesGcmCrypto::generate_key(), None)?;
     Ok(())
 }
 
@@ -77,13 +78,25 @@ pub async fn import_secret() -> Result<()> {
     let import_cipher =
         AesGcmCrypto::new(&key).context("Failed to create AES-GCM cipher for master secret")?;
 
+    // Reusing the origin VT_AUTH token keeps existing clients working when
+    // the master secret is imported onto another machine.
+    eprint!("Enter origin auth token (base64, empty to generate a new one): ");
+    io::stderr().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let origin_auth_token = if input.trim().is_empty() {
+        None
+    } else {
+        Some(input.trim().to_string())
+    };
+
     // Wrap v2 derivation is path-independent — no binary-path prompt needed.
     let real_passphrase = import_cipher.decrypt(&encrypted_passphrase_bytes)?;
     let passphrase_array: [u8; 32] = real_passphrase
         .try_into()
         .map_err(|_| anyhow::anyhow!("Decrypted passphrase must be exactly 32 bytes"))?;
 
-    create_and_save_passcode_passphrase(&passphrase_array)
+    create_and_save_passcode_passphrase(&passphrase_array, origin_auth_token)
         .context("Failed to create and save passcode passphrase")?;
 
     Ok(())
@@ -104,7 +117,7 @@ pub async fn rotate_passcode() -> Result<()> {
     let passphrase_array: [u8; 32] = decrypted_passphrase
         .try_into()
         .map_err(|_| anyhow::anyhow!("Decrypted passphrase must be exactly 32 bytes"))?;
-    create_and_save_passcode_passphrase(&passphrase_array)?;
+    create_and_save_passcode_passphrase(&passphrase_array, None)?;
     eprintln!(
         "Passcode rotated. If `vt ssh agent` is running, restart it — the cached passphrase cipher \
         is now stale and decrypt requests will fail until a fresh process is started."
