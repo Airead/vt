@@ -92,7 +92,13 @@ enum Commands {
     /// this connection and why it is or isn't cacheable
     Doctor,
     /// Will read plain text and output encrypted message for you
-    Create,
+    Create {
+        #[arg(short = 't', long, help = "Secret type (raw/totp)")]
+        secret_type: Option<String>,
+
+        #[arg(short = 's', long, help = "Secret to encrypt (prompted interactively when omitted)")]
+        secret: Option<String>,
+    },
     /// Decrypt an existing vt protocol as plaintext
     Read {
         #[arg(help = "A string in vt protocol format, e.g. vt://mac/0xxxx")]
@@ -565,10 +571,10 @@ async fn run(cli: Cli, file_populated_keys: Vec<String>) -> Result<()> {
             Fido2Commands::Remove { short_id } => server_macos::fido2_cli::fido2_remove(short_id),
             Fido2Commands::RemoveAll => server_macos::fido2_cli::fido2_remove_all(),
         },
-        Commands::Create => {
+        Commands::Create { secret_type, secret } => {
             let auth = require_auth(&cli.auth)?;
             let vt_client = VTClient::new(auth)?;
-            client::create(vt_client).await
+            client::create(vt_client, secret_type.clone(), secret.clone()).await
         }
         Commands::Read { vt, reason } => {
             let auth = require_auth(&cli.auth)?;

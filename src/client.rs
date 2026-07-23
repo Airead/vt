@@ -803,21 +803,35 @@ impl VTClient {
     }
 }
 
-pub async fn create(vt_client: VTClient) -> Result<()> {
-    eprint!("Enter secret type (raw/totp) [default: raw]: ");
-    io::stderr().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    if input.trim().is_empty() {
-        input = "raw".to_string();
-    }
-    debug!("User input for secret type: '{}'", input);
-    let secret_type = SecretType::from_str(&input.trim().to_lowercase());
+pub async fn create(
+    vt_client: VTClient,
+    secret_type_str: Option<String>,
+    secret_str: Option<String>,
+) -> Result<()> {
+    let secret_type_str = match secret_type_str {
+        Some(st) => st,
+        None => {
+            eprint!("Enter secret type (raw/totp) [default: raw]: ");
+            io::stderr().flush()?;
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            if input.trim().is_empty() {
+                "raw".to_string()
+            } else {
+                input
+            }
+        }
+    };
+    debug!("User input for secret type: '{}'", secret_type_str);
+    let secret_type = SecretType::from_str(&secret_type_str.trim().to_lowercase());
     if secret_type == SecretType::UNKNOWN {
-        return Err(anyhow::anyhow!("Invalid secret type: {}", input));
+        return Err(anyhow::anyhow!("Invalid secret type: {}", secret_type_str));
     }
 
-    let secret = crate::tty::prompt_input_password("Enter secret: ", "Secret entered: ")?;
+    let secret = match secret_str {
+        Some(s) => s,
+        None => crate::tty::prompt_input_password("Enter secret: ", "Secret entered: ")?,
+    };
     // DO NOT log `secret` — plaintext the user just typed.
 
     let res = vt_client
